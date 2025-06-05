@@ -4,6 +4,8 @@ import tkinter as tk
 from tkinter import messagebox
 import random
 import time
+import json
+import os
 
 class Minesweeper(tk.Frame):
     """簡単なマインスイーパーゲーム"""
@@ -14,6 +16,27 @@ class Minesweeper(tk.Frame):
         'medium': (16, 16, 40),
         'hard': (16, 30, 99)
     }
+
+    BEST_FILE = 'best_times.json'
+
+    def load_best_times(self):
+        if os.path.exists(self.BEST_FILE):
+            with open(self.BEST_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {lvl: [] for lvl in self.DIFFICULTIES}
+
+    def save_best_times(self):
+        with open(self.BEST_FILE, 'w', encoding='utf-8') as f:
+            json.dump(self.best_times, f, ensure_ascii=False, indent=2)
+
+    def format_best_times(self):
+        times = self.best_times.get(self.level, [])
+        if times:
+            return 'ベスト: ' + ', '.join(str(t) for t in times[:5])
+        return 'ベスト: なし'
+
+    def update_best_label(self):
+        self.best_label.config(text=self.format_best_times())
 
     def __init__(self, master, level='easy'):
         super().__init__(master)
@@ -26,6 +49,8 @@ class Minesweeper(tk.Frame):
         self.values = [[0]*self.cols for _ in range(self.rows)]
         self.game_over = False
         self.start_time = time.time()
+        self.used_ai = False
+        self.best_times = self.load_best_times()
         self.create_widgets()
         self.place_mines()
         self.calculate_values()
@@ -38,7 +63,11 @@ class Minesweeper(tk.Frame):
         self.info.pack(side=tk.LEFT)
         self.timer_label = tk.Label(top, text='時間: 0秒')
         self.timer_label.pack(side=tk.LEFT, padx=10)
-        tk.Button(top, text='AI一手', command=self.ai_step).pack(side=tk.LEFT)
+        self.ai_steps = tk.IntVar(value=1)
+        tk.OptionMenu(top, self.ai_steps, 1, 3, 5, 10, 0).pack(side=tk.LEFT)
+        tk.Button(top, text='AI実行', command=self.start_ai).pack(side=tk.LEFT)
+        self.best_label = tk.Label(top, text=self.format_best_times())
+        self.best_label.pack(side=tk.LEFT, padx=10)
         self.grid_frame = tk.Frame(self)
         self.grid_frame.pack()
         # 旗用の画像を生成
@@ -49,8 +78,12 @@ class Minesweeper(tk.Frame):
             self.flag_image.put('red', to=(x,3,x+1,3+height))
         for r in range(self.rows):
             for c in range(self.cols):
-                btn = tk.Button(self.grid_frame, width=2, height=1,
-                                command=lambda r=r, c=c: self.open_cell(r, c))
+                btn = tk.Button(
+                    self.grid_frame,
+                    width=2,
+                    height=1,
+                    bg='light blue',
+                    command=lambda r=r, c=c: self.open_cell(r, c))
                 btn.bind('<Button-3>', lambda e, r=r, c=c: self.toggle_flag(r, c))
                 btn.grid(row=r, column=c)
                 self.buttons[(r, c)] = btn
@@ -99,7 +132,7 @@ class Minesweeper(tk.Frame):
             return
         btn = self.buttons[(r, c)]
         val = self.values[r][c]
-        btn.config(relief=tk.SUNKEN, state=tk.DISABLED, text=str(val) if val else '')
+        btn.config(relief=tk.SUNKEN, state=tk.DISABLED, bg='light gray', text=str(val) if val else '')
         self.revealed.add((r, c))
         if val == 0:
             for nr in range(r-1, r+2):
@@ -114,7 +147,7 @@ class Minesweeper(tk.Frame):
         btn = self.buttons[(r, c)]
         if (r, c) in self.flags:
             self.flags.remove((r, c))
-            btn.config(image='', text='')
+            btn.config(image='', text='', bg='light blue')
         else:
             self.flags.add((r, c))
             btn.config(image=self.flag_image)
@@ -124,6 +157,13 @@ class Minesweeper(tk.Frame):
         if len(self.revealed) == self.rows*self.cols - self.mines:
             self.game_over = True
             elapsed = int(time.time() - self.start_time)
+            if not self.used_ai:
+                times = self.best_times.get(self.level, [])
+                times.append(elapsed)
+                times.sort()
+                self.best_times[self.level] = times[:5]
+                self.save_best_times()
+                self.update_best_label()
             messagebox.showinfo('クリア', f'おめでとう！\n経過時間: {elapsed}秒')
             self.master.destroy()
 
@@ -135,6 +175,30 @@ class Minesweeper(tk.Frame):
                     if (nr, nc) != (r, c):
                         result.append((nr, nc))
         return result
+
+    def start_ai(self):
+        self.used_ai = True
+        steps = self.ai_steps.get()
+        if steps == 0:
+            self.run_ai_until_done()
+        else:
+            self.step_count = steps
+            self.run_ai_steps()
+
+    def run_ai_steps(self):
+        if self.game_over or self.step_count <= 0:
+            return
+        self.ai_step()
+        self.step_count -= 1
+        if self.step_count > 0 and not self.game_over:
+            self.after(100, self.run_ai_steps)
+
+    def run_ai_until_done(self):
+        if self.game_over:
+            return
+        self.ai_step()
+        if not self.game_over:
+            self.after(100, self.run_ai_until_done)
 
     def ai_step(self):
         explanation = ''
